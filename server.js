@@ -11,7 +11,7 @@ app.use(express.json());
 
 // ── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'Nordic Intel API running', version: '1.0' });
+  res.json({ status: 'Dockside Intel API running', version: '1.0' });
 });
 
 // ── RSS PROXY ─────────────────────────────────────────────────────────────────
@@ -366,4 +366,30 @@ function stripHtml(str) {
   return (str || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-app.listen(PORT, () => console.log(`Nordic Intel API running on port ${PORT}`));
+
+// ── SEND EMAIL VIA RESEND ─────────────────────────────────────────────────────
+app.post('/api/send-email', async (req, res) => {
+  const resendKey = req.headers['x-resend-key'];
+  if (!resendKey) return res.status(400).json({ error: 'x-resend-key header required' });
+
+  const { to, from, subject, text } = req.body;
+  if (!to || !from || !subject) return res.status(400).json({ error: 'to, from, subject required' });
+
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + resendKey
+      },
+      body: JSON.stringify({ to, from, subject, text: text || '' })
+    });
+    const data = await response.json();
+    if (!response.ok) return res.status(response.status).json(data);
+    res.json({ success: true, id: data.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.listen(PORT, () => console.log(`Dockside Intel API running on port ${PORT}`));
