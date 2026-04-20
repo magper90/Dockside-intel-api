@@ -102,9 +102,7 @@ app.post('/api/scan', async (req, res) => {
 
   // Fetch RSS feeds
   for (const feed of feeds) {
-    if (!feed.url || feed.label?.startsWith('[Server only]')) {
-      // Still try server-only feeds since we're now server-side
-    }
+    if (!feed.url) continue;
     try {
       const response = await fetch(feed.url, {
         headers: {
@@ -267,18 +265,27 @@ async function classifyWithClaude(articles, apiKey, tenants, prospects) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 4000,
-        system: `You are a Nordic logistics & industrial real estate analyst at Mileway. Classify news articles for leasing signals.
+        system: `You are a Nordic logistics & industrial real estate analyst at Mileway. Classify news for leasing opportunity signals.
 
-STRICT RULES:
-1. Mark as irrelevant if: it is a market research report, analyst forecast, or industry overview without a specific company event
-2. Mark as irrelevant if: the article has no clear connection to Sweden, Denmark, or Finland
-3. Mark as irrelevant if: no specific named company is the subject of the news
-4. Company name: always extract from headline. Zalando, Stadium, Neste, DSV, PostNord, Bring, DHL, Maersk, H&M, IKEA, Amazon, Volvo, CEVA, NTG, Kuehne+Nagel etc. NEVER return "Unknown" if a company name appears anywhere in the title or description.
-5. Relevance score: only give 7+ if it is a specific Nordic company event (new facility, contract, expansion, funding). Generic market reports = 1-3.
-6. Action: write a specific outreach recommendation naming the company and region. Not a generic phrase.
+SCORING RULES — be strict:
+- Score 8-10: Specific named company + specific Nordic city + concrete event (new warehouse, signed contract, expansion announced, funding raised, new terminal opening). This is a direct leasing lead.
+- Score 5-7: Named Nordic company with growth/decline signal but city unclear, or international company entering Nordic market
+- Score 1-4: Generic industry news, market reports, forecasts, global news without Nordic company focus
+- Mark irrelevant: market research reports, analyst forecasts, non-Nordic events, articles with no named company
+
+COMPANY EXTRACTION — always extract from headline:
+- Look for company names like DSV, DB Schenker, PostNord, Bring, DHL, Maersk, Zalando, H&M, IKEA, Amazon, Volvo, Stadium, Elgiganten, Neste, Posti, NTG, CEVA, Kuehne+Nagel, GreenCarrier, Lidl, Ahlsell, Piab, and any other named company
+- NEVER return "Unknown" if any company name is visible in the title or description
+- If multiple companies, pick the primary subject of the news
+
+OUTREACH ACTION — be specific:
+- Name the company and city
+- State what space need the signal implies
+- Example: "Zalando expanding in Stockholm — contact their real estate team with availability at Rosersberg logistics park"
+- Never write generic phrases like "Consider proactive outreach about available space"
 
 Return ONLY a raw JSON array. Each object:
-{"index":N,"company":"SPECIFIC company name from headline — never Unknown if extractable","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence on what this specific company is doing","action":"specific outreach action naming company and region"}
+{"index":N,"company":"specific company name — never Unknown","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence: what is this specific company doing and why does it matter for industrial/logistics real estate","action":"specific outreach action naming company and city"}
 Only non-irrelevant items. Raw JSON array only.`,
         messages: [{ role: 'user', content: text }]
       })
