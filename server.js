@@ -265,149 +265,77 @@ Return ONLY a JSON array of news items found. Each item:
 });
 
 // ── CLASSIFY WITH CLAUDE ──────────────────────────────────────────────────────
+// Strategy: rule-based does the filtering and scoring (fast, high volume),
+// Claude only does company name extraction from Nordic-language headlines
 async function classifyWithClaude(articles, apiKey, tenants, prospects) {
-  // Sort by date descending so newest articles are classified first
-  const sorted = articles.slice().sort((a, b) => {
-    const da = new Date(a.date || 0), db = new Date(b.date || 0);
-    return db - da;
-  });
+  // Step 1: Rule-based classification for all articles — keeps volume high
+  const ruleBasedSignals = articles
+    .map((a, i) => classifyRuleBased(a, i, tenants, prospects))
+    .filter(Boolean);
 
-  // Process in batches of 20 — smaller batches = better accuracy per article
-  const BATCH_SIZE = 20;
-  const MAX_ARTICLES = 100;
-  const toProcess = sorted.slice(0, MAX_ARTICLES);
-  let allSignals = [];
+  if (!apiKey || ruleBasedSignals.length === 0) return ruleBasedSignals;
 
-  for (let start = 0; start < toProcess.length; start += BATCH_SIZE) {
-    const batch = toProcess.slice(start, start + BATCH_SIZE);
-    const batchSignals = await classifyBatch(batch, apiKey, tenants, prospects, start);
-    allSignals = allSignals.concat(batchSignals);
-  }
-
-  return allSignals;
-}
-
-async function classifyBatch(batch, apiKey, tenants, prospects, offset) {
-  const text = batch.map((a, i) =>
-    `[${i}] Title: ${a.title}\nSource: ${a.feedLabel}\nDate: ${a.date}\nDesc: ${a.description}`
-  ).join('\n\n');
+  // Step 2: Use Claude only to fix company names on articles where rule-based returned Unknown
+  const unknownCompanies = ruleBasedSignals.filter(s => s.company === 'Unknown');
+  if (unknownCompanies.length === 0) return ruleBasedSignals;
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 6000,
-        system: `You are a senior analyst at Mileway, a pan-European last-mile logistics real estate platform. You read Nordic news and classify signals relevant to industrial and logistics real estate leasing.
-
-WHAT TO KEEP — mark as relevant if any of these:
-- A company leasing, expanding into, or vacating warehouse/logistics/industrial space in Sweden, Denmark or Finland
-- A logistics/industrial property developer building, acquiring or selling assets in the Nordics (Catena, Sagax, Castellum, Panattoni, Logicenters, Nyfosa, Stendörren, Prologis, GLP, P3, Nordic RE Finance)
-- A logistics company winning a major contract, receiving funding, or opening a new facility in the Nordics
-- A company announcing layoffs, restructuring or downsizing with Nordic operations
-- Real estate fund acquiring or selling Nordic logistics/industrial portfolio
-- Build-to-suit or speculative logistics development announced in Nordic city
-
-WHAT TO REJECT — mark as irrelevant:
-- Military logistics, defence contracts, weapons
-- Market research reports and analyst forecasts without a named company event
-- Pure financial results (revenue, EBITDA) without property/space implications
-- Non-Nordic events with only passing Nordic mention
-- Tyre distributors, chemical distributors — not warehouse real estate
-
-COMPANY NAME — extract carefully from Swedish, Danish and Finnish headlines:
-- Swedish: "Catena köper" = Catena, "Nowaste Logistics utökar" = Nowaste Logistics, "Widéns öppnar" = Widéns, "DSV välkomnar" = DSV
-- Danish: "køber" = buys, "lejer" = leases, "bygger" = builds
-- Finnish: "ostaa" = buys, "vuokraa" = leases, "rakentaa" = builds
-- Look at the start of the headline — the subject is almost always the company
-- NEVER return Unknown if a company name appears anywhere in title or description
-
-SCORING:
-- 8-10: Named company + specific Nordic city + concrete event (lease signed, building started, new terminal opening, portfolio sold). Direct leasing lead or competitive intel.
-- 6-7: Named company + Nordic country + clear growth/decline signal
-- 4-5: Relevant Nordic logistics/RE news but company or location vague
-- 1-3: Weak signal, mostly irrelevant, borderline
-- Irrelevant: fails the keep/reject rules above
-
-OUTREACH ACTION — must be specific, name the company and city:
-- Tenant expanding: "Contact [Company] facilities team in [City] — [sqm/signal] implies new space requirement"
-- Developer building: "Monitor [Developer] [sqm] sqm project in [City] — competitive supply or pre-let opportunity"
-- Fund acquisition: "Note [Fund] acquired [asset] in [City] — new landlord relationship or portfolio insight"
-- Layoffs: "Flag [Company] [City] lease for renewal risk review — restructuring signal"
-
-EXAMPLES OF CORRECT CLASSIFICATION:
-
-Headline: "Nowaste Logistics utökar till ny fastighet i Helsingborg – hyr 6 200 kvm av Catena"
-→ company:"Nowaste Logistics", signal:"expansion", country:"sweden", region:"Helsingborg", relevance:9
-→ summary:"Nowaste Logistics signs 6,200 sqm lease in Helsingborg from Catena — direct tenant expansion signal"
-→ action:"Contact Nowaste Logistics facilities team in Helsingborg — 6,200 sqm lease confirms active expansion, explore adjacent or future capacity"
-
-Headline: "Catena köper terminal i Jönköping – affär på 189 Mkr"
-→ company:"Catena", signal:"expansion", country:"sweden", region:"Jönköping", relevance:8
-→ summary:"Catena acquires logistics terminal in Jönköping for SEK 189M — competitor/peer acquiring in core Mileway market"
-→ action:"Monitor Catena's Jönköping acquisition — new competing owner in our asset region, assess impact on supply/demand balance"
-
-Headline: "DSV välkomnar Lantmännen Biorefineries till logistikcentret i Norrköping"
-→ company:"DSV", signal:"contract", country:"sweden", region:"Norrköping", relevance:8
-→ summary:"DSV signs new tenant Lantmännen at their Norrköping logistics center — DSV growing contract logistics occupancy"
-→ action:"DSV expanding in Norrköping — contact DSV real estate team about adjacent capacity needs as they grow"
-
-Headline: "Bygger ny klimatneutral logistikfastighet om 27 000 kvm i Malmö"
-→ company:"Nordic Construction" (or developer name if visible), signal:"expansion", country:"sweden", region:"Malmö", relevance:8
-→ summary:"New 27,000 sqm climate-neutral logistics facility being built in Malmö — new supply entering core Mileway market"
-→ action:"Monitor this 27,000 sqm spec development in Malmö — new competing supply, assess impact on vacancy and rents"
-
-Headline: "Loans in focus: Apollo issues €900m logistics loan"
-→ signal:"irrelevant" (no Nordic company, no Nordic city)
-
-Headline: "Denmark awards Rheinmetall MAN Military Vehicles major framework deal"
-→ signal:"irrelevant" (military contract, not logistics real estate)
-
-Return ONLY a raw JSON array. Each object:
-{"index":N,"company":"specific company name from headline — never Unknown","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence in English: what specifically happened and why it matters for Nordic logistics/industrial RE","action":"specific recommendation naming company and city"}
-Only non-irrelevant items. Raw JSON array only.`,
-        messages: [{ role: 'user', content: text }]
-      })
+    const extractedNames = await extractCompanyNames(unknownCompanies, apiKey);
+    // Merge extracted names back
+    ruleBasedSignals.forEach(s => {
+      if (s.company === 'Unknown' && extractedNames[s.id]) {
+        s.company = extractedNames[s.id];
+        s.match = matchCompany(s.company, tenants, prospects);
+      }
     });
-
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error.message);
-
-    const raw = data.content?.[0]?.text || '[]';
-    const classified = JSON.parse(raw.replace(/```json|```/g, '').trim());
-
-    return classified
-      .filter(c => c.signal !== 'irrelevant')
-      .map(c => {
-        const a = batch[c.index] || {};
-        const company = c.company || a.company || 'Unknown';
-        return {
-          id: `sig-${c.index}-${Date.now()}`,
-          company,
-          signal: c.signal,
-          country: c.country || a.feedCountry || 'unknown',
-          region: c.region || a.region || 'unknown',
-          relevance: c.relevance || 5,
-          summary: c.summary || '',
-          action: c.action || '',
-          headline: a.title || '',
-          source: a.feedLabel || '',
-          url: a.link || '#',
-          date: a.date || '',
-          sourceType: a.sourceType || 'rss',
-          match: matchCompany(company, tenants, prospects)
-        };
-      });
   } catch (e) {
-    console.error('Claude classify batch failed:', e.message);
-    return batch.map((a, i) => classifyRuleBased(a, i, tenants, prospects)).filter(Boolean);
+    console.warn('Company extraction failed, keeping Unknown:', e.message);
   }
+
+  return ruleBasedSignals;
 }
+
+async function extractCompanyNames(signals, apiKey) {
+  // Send just the headlines to Claude and ask only for company names
+  const headlines = signals.slice(0, 40).map((s, i) =>
+    `[${i}] ${s.headline}`
+  ).join('\n');
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2000,
+      system: `Extract the primary company name from each headline. Headlines are in Swedish, Danish, Finnish or English.
+Swedish tips: subject is usually first word(s) before the verb. "Catena köper" = Catena. "Nowaste Logistics utökar" = Nowaste Logistics. "DSV välkomnar" = DSV. "Widéns öppnar" = Widéns. "Bring etablerar" = Bring.
+Danish: "køber/lejer/bygger" — company before the verb.
+Finnish: "ostaa/vuokraa/rakentaa" — company before the verb.
+Return ONLY a JSON object mapping index to company name: {"0":"Catena","1":"Nowaste Logistics","2":"DSV"}
+If truly no company name, use null. Raw JSON only.`,
+      messages: [{ role: 'user', content: headlines }]
+    })
+  });
+
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message);
+  const raw = data.content?.[0]?.text || '{}';
+  const names = JSON.parse(raw.replace(/```json|```/g, '').trim());
+
+  // Map back to signal IDs
+  const result = {};
+  signals.slice(0, 40).forEach((s, i) => {
+    if (names[i] && names[i] !== null) {
+      result[s.id] = names[i];
+    }
+  });
+  return result;
+}
+
 
 // ── RULE-BASED CLASSIFIER (fallback) ─────────────────────────────────────────
 function classifyRuleBased(a, i, tenants = [], prospects = []) {
