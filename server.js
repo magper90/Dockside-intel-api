@@ -302,7 +302,7 @@ async function classifyBatch(batch, apiKey, tenants, prospects, offset) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 4000,
+        max_tokens: 6000,
         system: `You are a senior analyst at Mileway, a pan-European last-mile logistics real estate platform. You read Nordic news and classify signals relevant to industrial and logistics real estate leasing.
 
 WHAT TO KEEP — mark as relevant if any of these:
@@ -339,6 +339,34 @@ OUTREACH ACTION — must be specific, name the company and city:
 - Developer building: "Monitor [Developer] [sqm] sqm project in [City] — competitive supply or pre-let opportunity"
 - Fund acquisition: "Note [Fund] acquired [asset] in [City] — new landlord relationship or portfolio insight"
 - Layoffs: "Flag [Company] [City] lease for renewal risk review — restructuring signal"
+
+EXAMPLES OF CORRECT CLASSIFICATION:
+
+Headline: "Nowaste Logistics utökar till ny fastighet i Helsingborg – hyr 6 200 kvm av Catena"
+→ company:"Nowaste Logistics", signal:"expansion", country:"sweden", region:"Helsingborg", relevance:9
+→ summary:"Nowaste Logistics signs 6,200 sqm lease in Helsingborg from Catena — direct tenant expansion signal"
+→ action:"Contact Nowaste Logistics facilities team in Helsingborg — 6,200 sqm lease confirms active expansion, explore adjacent or future capacity"
+
+Headline: "Catena köper terminal i Jönköping – affär på 189 Mkr"
+→ company:"Catena", signal:"expansion", country:"sweden", region:"Jönköping", relevance:8
+→ summary:"Catena acquires logistics terminal in Jönköping for SEK 189M — competitor/peer acquiring in core Mileway market"
+→ action:"Monitor Catena's Jönköping acquisition — new competing owner in our asset region, assess impact on supply/demand balance"
+
+Headline: "DSV välkomnar Lantmännen Biorefineries till logistikcentret i Norrköping"
+→ company:"DSV", signal:"contract", country:"sweden", region:"Norrköping", relevance:8
+→ summary:"DSV signs new tenant Lantmännen at their Norrköping logistics center — DSV growing contract logistics occupancy"
+→ action:"DSV expanding in Norrköping — contact DSV real estate team about adjacent capacity needs as they grow"
+
+Headline: "Bygger ny klimatneutral logistikfastighet om 27 000 kvm i Malmö"
+→ company:"Nordic Construction" (or developer name if visible), signal:"expansion", country:"sweden", region:"Malmö", relevance:8
+→ summary:"New 27,000 sqm climate-neutral logistics facility being built in Malmö — new supply entering core Mileway market"
+→ action:"Monitor this 27,000 sqm spec development in Malmö — new competing supply, assess impact on vacancy and rents"
+
+Headline: "Loans in focus: Apollo issues €900m logistics loan"
+→ signal:"irrelevant" (no Nordic company, no Nordic city)
+
+Headline: "Denmark awards Rheinmetall MAN Military Vehicles major framework deal"
+→ signal:"irrelevant" (military contract, not logistics real estate)
 
 Return ONLY a raw JSON array. Each object:
 {"index":N,"company":"specific company name from headline — never Unknown","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence in English: what specifically happened and why it matters for Nordic logistics/industrial RE","action":"specific recommendation naming company and city"}
