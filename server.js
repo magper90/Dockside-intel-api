@@ -235,10 +235,27 @@ Return ONLY a JSON array of news items found. Each item:
     signals = allArticles.map((a, i) => classifyRuleBased(a, i, tenants, prospects)).filter(Boolean);
   }
 
+  // Deduplicate signals by headline
+  const seenHeadlines = new Set();
+  const dedupedSignals = signals.filter(s => {
+    const key = (s.headline || '').slice(0, 60).toLowerCase();
+    if (seenHeadlines.has(key)) return false;
+    seenHeadlines.add(key);
+    return true;
+  });
+
+  // Sort by relevance desc, then date desc
+  dedupedSignals.sort((a, b) => {
+    if (b.relevance !== a.relevance) return b.relevance - a.relevance;
+    return new Date(b.date || 0) - new Date(a.date || 0);
+  });
+
+  console.log(`Scan complete: ${allArticles.length} articles → ${dedupedSignals.length} signals (${feedResults.success} feeds, ${aiArticles.length} AI articles)`);
+
   res.json({
-    signals,
+    signals: dedupedSignals,
     meta: {
-      total: signals.length,
+      total: dedupedSignals.length,
       rssSuccess: feedResults.success,
       rssFailed: feedResults.failed,
       aiArticles: aiArticles.length,
@@ -249,7 +266,28 @@ Return ONLY a JSON array of news items found. Each item:
 
 // ── CLASSIFY WITH CLAUDE ──────────────────────────────────────────────────────
 async function classifyWithClaude(articles, apiKey, tenants, prospects) {
-  const batch = articles.slice(0, 50);
+  // Sort by date descending so newest articles are classified first
+  const sorted = articles.slice().sort((a, b) => {
+    const da = new Date(a.date || 0), db = new Date(b.date || 0);
+    return db - da;
+  });
+
+  // Process in batches of 20 — smaller batches = better accuracy per article
+  const BATCH_SIZE = 20;
+  const MAX_ARTICLES = 100;
+  const toProcess = sorted.slice(0, MAX_ARTICLES);
+  let allSignals = [];
+
+  for (let start = 0; start < toProcess.length; start += BATCH_SIZE) {
+    const batch = toProcess.slice(start, start + BATCH_SIZE);
+    const batchSignals = await classifyBatch(batch, apiKey, tenants, prospects, start);
+    allSignals = allSignals.concat(batchSignals);
+  }
+
+  return allSignals;
+}
+
+async function classifyBatch(batch, apiKey, tenants, prospects, offset) {
   const text = batch.map((a, i) =>
     `[${i}] Title: ${a.title}\nSource: ${a.feedLabel}\nDate: ${a.date}\nDesc: ${a.description}`
   ).join('\n\n');
@@ -338,7 +376,7 @@ Only non-irrelevant items. Raw JSON array only.`,
         };
       });
   } catch (e) {
-    console.error('Claude classify failed:', e.message);
+    console.error('Claude classify batch failed:', e.message);
     return batch.map((a, i) => classifyRuleBased(a, i, tenants, prospects)).filter(Boolean);
   }
 }
