@@ -156,9 +156,9 @@ app.post('/api/scan', async (req, res) => {
   if (apiKey) {
     const regionStr = regions.slice(0, 8).join(', ') || 'Stockholm, Gothenburg, Malmö, Copenhagen, Helsinki';
     const queries = [
-      `Latest 2025 2026 logistics warehouse expansion news in ${regionStr}. New distribution centers, 3PL contracts, facility openings.`,
-      `Nordic Scandinavia logistics industrial real estate news 2025 2026. DSV Schenker PostNord Bring DHL Maersk new warehouses contracts funding rounds.`,
-      `Sweden Denmark Finland logistics company expansion announcements 2025 2026. New facilities, contracts won, funding, leadership changes.`
+      `Site:mynewsdesk.com OR site:nasdaq.com OR site:dsv.com OR site:postnord.com OR site:bring.com logistics warehouse expansion ${regionStr} 2025 2026. Only return results that are actual company press releases or announcements from named Nordic companies.`,
+      `Named Nordic logistics companies announcing new warehouses or contracts in Sweden Denmark Finland 2025 2026. Companies like DSV, DB Schenker, PostNord, Bring, DHL, Maersk, Zalando, H&M, IKEA, Amazon. Must include company name and Nordic city.`,
+      `Nordic logistics real estate news 2025 2026 Stockholm Gothenburg Malmö Copenhagen Helsinki. Specific company announcements only — not market research reports, not global news.`
     ];
 
     for (const query of queries) {
@@ -267,10 +267,19 @@ async function classifyWithClaude(articles, apiKey, tenants, prospects) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 4000,
-        system: `You are a Nordic logistics & industrial real estate analyst. Classify news for leasing signals.
+        system: `You are a Nordic logistics & industrial real estate analyst at Mileway. Classify news articles for leasing signals.
+
+STRICT RULES:
+1. Mark as irrelevant if: it is a market research report, analyst forecast, or industry overview without a specific company event
+2. Mark as irrelevant if: the article has no clear connection to Sweden, Denmark, or Finland
+3. Mark as irrelevant if: no specific named company is the subject of the news
+4. Company name: always extract from headline. Zalando, Stadium, Neste, DSV, PostNord, Bring, DHL, Maersk, H&M, IKEA, Amazon, Volvo, CEVA, NTG, Kuehne+Nagel etc. NEVER return "Unknown" if a company name appears anywhere in the title or description.
+5. Relevance score: only give 7+ if it is a specific Nordic company event (new facility, contract, expansion, funding). Generic market reports = 1-3.
+6. Action: write a specific outreach recommendation naming the company and region. Not a generic phrase.
+
 Return ONLY a raw JSON array. Each object:
-{"index":N,"company":"extract the MAIN company name from the headline/description — never return Unknown if a company name is visible, look carefully at the headline","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence on RE leasing relevance","action":"one sentence specific outreach recommendation mentioning the company by name"}
-Rules: Extract company name carefully from the headline. Zalando, Stadium, Neste, DSV etc are all extractable. Only return Unknown if truly no company is mentioned. Only non-irrelevant items. Raw JSON array only.`,
+{"index":N,"company":"SPECIFIC company name from headline — never Unknown if extractable","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence on what this specific company is doing","action":"specific outreach action naming company and region"}
+Only non-irrelevant items. Raw JSON array only.`,
         messages: [{ role: 'user', content: text }]
       })
     });
@@ -314,6 +323,9 @@ function classifyRuleBased(a, i, tenants = [], prospects = []) {
   const t = ((a.title || '') + ' ' + (a.description || '')).toLowerCase();
   const relevant = ['logistics','warehouse','distribut','supply chain','3pl','freight','industrial','transport','e-commerce','fulfillment','lager','logistik'].some(k => t.includes(k));
   if (!relevant) return null;
+  // Must have Nordic geography signal
+  const nordic = ['sweden','sverige','stockholm','gothenburg','göteborg','malmö','jönköping','linköping','norrköping','halmstad','helsingborg','växjö','denmark','danmark','copenhagen','aarhus','finland','suomi','helsinki','tampere','scandinavia','nordic','nordics'].some(k => t.includes(k));
+  if (!nordic) return null;
 
   let signal = 'growth';
   if (/layoff|redundan|job cut|downsize|restructur|varslar/.test(t)) signal = 'layoff';
