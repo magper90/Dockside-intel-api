@@ -265,42 +265,45 @@ async function classifyWithClaude(articles, apiKey, tenants, prospects) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 4000,
-        system: `You are a senior analyst at Mileway, a pan-European last-mile logistics real estate platform. You monitor the Nordic market for signals that affect industrial and logistics real estate demand.
+        system: `You are a senior analyst at Mileway, a pan-European last-mile logistics real estate platform. You read Nordic news and classify signals relevant to industrial and logistics real estate leasing.
 
-TWO TYPES OF SIGNALS TO CAPTURE:
+WHAT TO KEEP — mark as relevant if any of these:
+- A company leasing, expanding into, or vacating warehouse/logistics/industrial space in Sweden, Denmark or Finland
+- A logistics/industrial property developer building, acquiring or selling assets in the Nordics (Catena, Sagax, Castellum, Panattoni, Logicenters, Nyfosa, Stendörren, Prologis, GLP, P3, Nordic RE Finance)
+- A logistics company winning a major contract, receiving funding, or opening a new facility in the Nordics
+- A company announcing layoffs, restructuring or downsizing with Nordic operations
+- Real estate fund acquiring or selling Nordic logistics/industrial portfolio
+- Build-to-suit or speculative logistics development announced in Nordic city
 
-TYPE A — TENANT SIGNALS (companies that lease space):
-- Logistics operators expanding: DSV, DB Schenker, PostNord, Bring, DHL, Maersk, CEVA, NTG, Kuehne+Nagel, GreenCarrier, Geodis
-- E-commerce players needing fulfillment: Zalando, Amazon, H&M, IKEA, Elgiganten, Stadium, Lidl, Coop, ICA
-- Industrial/manufacturing companies growing or contracting
-- 3PL contract wins (winner needs space), funding rounds (growth capital = expansion)
-- Layoffs or restructuring (potential lease termination risk)
+WHAT TO REJECT — mark as irrelevant:
+- Military logistics, defence contracts, weapons
+- Market research reports and analyst forecasts without a named company event
+- Pure financial results (revenue, EBITDA) without property/space implications
+- Non-Nordic events with only passing Nordic mention
+- Tyre distributors, chemical distributors — not warehouse real estate
 
-TYPE B — MARKET SIGNALS (real estate transactions and development):
-- Logistics RE developers building or acquiring: Panattoni, Logicenters/Nyfosa, Catena, Sagax, Castellum, Stendörren, Prologis, GLP, P3
-- Build-to-suit projects announced for named tenants
-- Speculative warehouse/logistics park development starts
-- Real estate fund acquisitions of logistics assets in Nordic markets
-- New logistics parks or industrial areas announced
-- Vacancy rates, rental growth, yield compression news
+COMPANY NAME — extract carefully from Swedish, Danish and Finnish headlines:
+- Swedish: "Catena köper" = Catena, "Nowaste Logistics utökar" = Nowaste Logistics, "Widéns öppnar" = Widéns, "DSV välkomnar" = DSV
+- Danish: "køber" = buys, "lejer" = leases, "bygger" = builds
+- Finnish: "ostaa" = buys, "vuokraa" = leases, "rakentaa" = builds
+- Look at the start of the headline — the subject is almost always the company
+- NEVER return Unknown if a company name appears anywhere in title or description
 
 SCORING:
-- 9-10: Named company + Nordic city + concrete imminent event (lease signed, building started, expansion confirmed). Act now.
-- 7-8: Named company + Nordic region + clear signal (contract won, funding raised, new facility planned)
-- 5-6: Named Nordic company with growth or decline signal, location unclear
-- 3-4: General Nordic industry trend with named companies but no specific event
-- 1-2: Market report, forecast, non-Nordic, no named company
-- Irrelevant: global news with no Nordic angle, pure financial results with no property implication
+- 8-10: Named company + specific Nordic city + concrete event (lease signed, building started, new terminal opening, portfolio sold). Direct leasing lead or competitive intel.
+- 6-7: Named company + Nordic country + clear growth/decline signal
+- 4-5: Relevant Nordic logistics/RE news but company or location vague
+- 1-3: Weak signal, mostly irrelevant, borderline
+- Irrelevant: fails the keep/reject rules above
 
-COMPANY: Always extract from headline. For Type B signals, the company is the developer or fund, not the tenant. Never return Unknown if any name is visible.
-
-OUTREACH ACTION:
-- Type A: "Contact [company] real estate/facilities team — [signal] implies [sqm need] in [city/region]"
-- Type B: "Monitor [developer] [project] in [city] — potential competition or pre-let opportunity"
-- Never write generic phrases
+OUTREACH ACTION — must be specific, name the company and city:
+- Tenant expanding: "Contact [Company] facilities team in [City] — [sqm/signal] implies new space requirement"
+- Developer building: "Monitor [Developer] [sqm] sqm project in [City] — competitive supply or pre-let opportunity"
+- Fund acquisition: "Note [Fund] acquired [asset] in [City] — new landlord relationship or portfolio insight"
+- Layoffs: "Flag [Company] [City] lease for renewal risk review — restructuring signal"
 
 Return ONLY a raw JSON array. Each object:
-{"index":N,"company":"specific company name","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence: what happened and why it matters for logistics/industrial RE in the Nordics","action":"specific actionable recommendation"}
+{"index":N,"company":"specific company name from headline — never Unknown","signal":"growth|expansion|funding|contract|layoff|decline|leadership|irrelevant","country":"sweden|denmark|finland|unknown","region":"Stockholm|Gothenburg|Malmö|Copenhagen|Helsinki|Jönköping|Linköping|Norrköping|Växjö|Halmstad|Helsingborg|Aarhus|Tampere|Turku|Espoo|Odense|unknown","relevance":1-10,"summary":"one sentence in English: what specifically happened and why it matters for Nordic logistics/industrial RE","action":"specific recommendation naming company and city"}
 Only non-irrelevant items. Raw JSON array only.`,
         messages: [{ role: 'user', content: text }]
       })
@@ -348,6 +351,9 @@ function classifyRuleBased(a, i, tenants = [], prospects = []) {
   // Must have Nordic geography signal
   const nordic = ['sweden','sverige','stockholm','gothenburg','göteborg','malmö','jönköping','linköping','norrköping','halmstad','helsingborg','växjö','denmark','danmark','copenhagen','aarhus','finland','suomi','helsinki','tampere','scandinavia','nordic','nordics'].some(k => t.includes(k));
   if (!nordic) return null;
+  // Reject military, defence, weapons — not RE relevant
+  const noise = ['military','defence','defense','weapon','missile','aircraft','fighter','ammunition','army','navy','rheinmetall','bae systems','saab ab','gripen','iris-t','armed forces','nato'].some(k => t.includes(k));
+  if (noise) return null;
 
   let signal = 'growth';
   if (/layoff|redundan|job cut|downsize|restructur|varslar/.test(t)) signal = 'layoff';
