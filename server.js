@@ -68,55 +68,59 @@ app.post('/api/scan', async (req, res) => {
   // Batch active companies into groups of 8, build one targeted RSS query per group
   // Cap at 25 queries max to avoid rate limiting and timeout
   const companies = activeCompanies.length > 0 ? activeCompanies : DEFAULT_COMPANIES;
-  const BATCH_SIZE = 8;
-  const MAX_QUERIES = 25;
+  const BATCH_SIZE = 12;
+  const MAX_QUERIES = 15;
   const batches = [];
   for (let i = 0; i < companies.length && batches.length < MAX_QUERIES; i += BATCH_SIZE) {
     batches.push(companies.slice(i, i + BATCH_SIZE));
   }
 
-  // Also add 5 structural queries for RE developer/fund signals not tied to specific companies
+  // Add 3 structural queries for RE developer/fund signals
   const structuralQueries = [
-    'logistikfastighet OR logistikpark OR lager hyresavtal OR byggstart OR förvärvar sverige',
-    'logistics warehouse expansion contract OR terminal OR fulfillment stockholm OR gothenburg OR malmo OR copenhagen OR helsinki',
-    'build-to-suit OR "logistics park" OR "distribution center" nordic scandinavia 2025 2026',
-    'logistik lager terminal kobenhavn OR aarhus lejemaal OR bygger OR koeber 2025 2026',
-    'logistiikka varasto terminaali helsinki OR tampere vuokra OR rakentaa 2025 2026',
+    'logistikfastighet OR lager hyresavtal OR byggstart OR förvärvar logistik sverige',
+    'logistics warehouse expansion terminal fulfillment stockholm OR gothenburg OR malmo OR copenhagen OR helsinki',
+    'build-to-suit OR logistikpark OR "distribution center" nordic scandinavia 2025 2026',
   ];
 
   console.log(`Scan: ${batches.length} company batches + ${structuralQueries.length} structural queries`);
 
-  // Run company batch queries
-  for (const batch of batches) {
+  // Build all query URLs
+  const allQueries = [];
+  batches.forEach(batch => {
     const companyStr = batch.map(c => `"${c}"`).join(' OR ');
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(
-      `(${companyStr}) AND (logistics OR warehouse OR lager OR terminal OR expansion OR contract OR layoff OR varslar OR fastighet)`
+      `(${companyStr}) AND (logistics OR warehouse OR lager OR terminal OR expansion OR contract OR layoff OR fastighet)`
     )}&hl=en&gl=SE&ceid=SE:en`;
+    allQueries.push({ url, label: `Companies: ${batch.slice(0,3).join(', ')}...`, country: 'unknown' });
+  });
+  structuralQueries.forEach(q => {
+    allQueries.push({
+      url: `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en&gl=SE&ceid=SE:en`,
+      label: 'Nordic RE/Logistics',
+      country: 'unknown'
+    });
+  });
 
-    const result = await fetchRSSFeed(url, 'Company Query');
+  // Run all queries in parallel — much faster than sequential
+  // Google News RSS is stateless so parallel is safe
+  const queryResults = await Promise.all(
+    allQueries.map(q => fetchRSSFeed(q.url, q.label))
+  );
+
+  queryResults.forEach((result, i) => {
+    meta.queriesRun++;
     if (result.ok) {
-      result.items.forEach(item => allArticles.push({ ...item, feedLabel: `Companies: ${batch.slice(0,3).join(', ')}...`, feedCountry: 'unknown', sourceType: 'rss' }));
+      result.items.forEach(item => allArticles.push({
+        ...item,
+        feedLabel: allQueries[i].label,
+        feedCountry: allQueries[i].country,
+        sourceType: 'rss'
+      }));
       meta.rssSuccess++;
     } else {
       meta.rssFailed++;
     }
-    meta.queriesRun++;
-    await sleep(400); // avoid rate limiting
-  }
-
-  // Run structural queries
-  for (const q of structuralQueries) {
-    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en&gl=SE&ceid=SE:en`;
-    const result = await fetchRSSFeed(url, 'Structural Query');
-    if (result.ok) {
-      result.items.forEach(item => allArticles.push({ ...item, feedLabel: 'Nordic RE/Logistics', feedCountry: 'unknown', sourceType: 'rss' }));
-      meta.rssSuccess++;
-    } else {
-      meta.rssFailed++;
-    }
-    meta.queriesRun++;
-    await sleep(400);
-  }
+  });
 
   // Run any extra manual feeds the user has added
   for (const feed of extraFeeds) {
@@ -175,14 +179,17 @@ app.post('/api/scan', async (req, res) => {
 // ── FETCH RSS FEED ────────────────────────────────────────────────────────────
 async function fetchRSSFeed(url, label) {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'application/rss+xml, application/xml, text/xml, */*',
         'Accept-Language': 'sv-SE,sv;q=0.9,en;q=0.8,da;q=0.7,fi;q=0.6'
       },
-      timeout: 10000
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
     if (!response.ok) return { ok: false, error: `HTTP ${response.status}` };
     const text = await response.text();
     const parser = new xml2js.Parser({ explicitArray: false });
